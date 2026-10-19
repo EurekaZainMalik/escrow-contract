@@ -1,5 +1,6 @@
 #![cfg(test)]
-//! Regression suite for `version`, covering issues #558 and #559.
+//! Regression suite for `version`, covering issues #558, #559 and the
+//! contract-metadata fix.
 //!
 //! # #558 — zero state mutation
 //! `version` is a public read path and must never write to instance,
@@ -11,19 +12,19 @@
 //! `version` or `read_version` fails these tests.
 //!
 //! # #559 — documented return contract
-//! The rustdoc on `version` documents three return cases and states the
-//! function is infallible (no error variants).  Each documented case has a
-//! test below:
+//! `version` returns the compile-time `CONTRACT_VERSION` constant, so it is
+//! infallible (no error variants) and independent of storage.  Each
+//! documented case has a test below:
 //!
 //! | Documented case                  | Test                                              |
 //! |----------------------------------|---------------------------------------------------|
-//! | `1` after `initialize`           | `version_is_one_after_initialize`                 |
-//! | stored value after upgrade(s)    | `version_returns_stored_marker`                   |
-//! | `1` when uninitialized           | `version_on_uninitialized_contract_returns_one`   |
+//! | `CONTRACT_VERSION` after init    | `version_is_one_after_initialize`                 |
+//! | `CONTRACT_VERSION` regardless of storage | `version_ignores_stored_marker`           |
+//! | `CONTRACT_VERSION` when uninitialized | `version_on_uninitialized_contract_returns_one` |
 //! | infallible — no error variants   | `try_version_never_errors`                        |
+//! | matches `Cargo.toml`             | `version_matches_cargo_pkg_version`               |
 
 use super::*;
-use crate::DataKey;
 use soroban_sdk::{vec, Address, Env};
 
 fn initialized_escrow(env: &Env) -> (Address, MilestoneEscrowClient<'_>) {
@@ -65,7 +66,7 @@ fn version_does_not_mutate_ledger_when_initialized() {
     let v = escrow.version();
     let after = env.to_ledger_snapshot();
 
-    assert_eq!(v, 1);
+    assert_eq!(v, CONTRACT_VERSION);
     assert_eq!(before, after, "version must not mutate the ledger");
 }
 
@@ -79,13 +80,10 @@ fn version_does_not_mutate_ledger_when_uninitialized() {
     let v = escrow.version();
     let after = env.to_ledger_snapshot();
 
-    assert_eq!(v, 1);
+    assert_eq!(v, CONTRACT_VERSION);
     assert_eq!(before, after, "version must not mutate the ledger");
-    // The default must not be materialized into storage.
-    let stored = env.as_contract(&contract_id, || {
-        env.storage().instance().has(&DataKey::Version)
-    });
-    assert!(!stored);
+    // Nothing must be materialized into storage.
+    assert_eq!(env.storage().instance().get(&DataKey::Version), None);
 }
 
 #[test]
@@ -95,7 +93,7 @@ fn repeated_version_calls_do_not_mutate_ledger() {
 
     let before = env.to_ledger_snapshot();
     for _ in 0..5 {
-        assert_eq!(escrow.version(), 1);
+        assert_eq!(escrow.version(), CONTRACT_VERSION);
     }
     let after = env.to_ledger_snapshot();
 
@@ -139,13 +137,13 @@ fn version_is_one_after_initialize() {
     let env = Env::default();
     let (_, escrow) = initialized_escrow(&env);
 
-    assert_eq!(escrow.version(), 1);
+    assert_eq!(escrow.version(), CONTRACT_VERSION);
 }
 
-/// `upgrade` bumps the stored marker; seeding it directly checks `version`
-/// reports whatever is stored without needing a real WASM hash.
+/// `version` reports the compile-time constant, not the storage schema
+/// marker, so seeding `DataKey::Version` must not change the result.
 #[test]
-fn version_returns_stored_marker() {
+fn version_ignores_stored_marker() {
     let env = Env::default();
     let (contract_id, escrow) = initialized_escrow(&env);
 
@@ -154,7 +152,7 @@ fn version_returns_stored_marker() {
     });
 
     let before = env.to_ledger_snapshot();
-    assert_eq!(escrow.version(), 7);
+    assert_eq!(escrow.version(), CONTRACT_VERSION);
     assert_eq!(before, env.to_ledger_snapshot());
 }
 
@@ -164,7 +162,7 @@ fn version_on_uninitialized_contract_returns_one() {
     let contract_id = env.register(MilestoneEscrow, ());
     let escrow = MilestoneEscrowClient::new(&env, &contract_id);
 
-    assert_eq!(escrow.version(), 1);
+    assert_eq!(escrow.version(), CONTRACT_VERSION);
 }
 
 /// The rustdoc lists no error variants; confirm none is reachable in any
@@ -175,13 +173,24 @@ fn try_version_never_errors() {
 
     let uninit_id = env.register(MilestoneEscrow, ());
     let uninit = MilestoneEscrowClient::new(&env, &uninit_id);
-    assert_eq!(uninit.try_version(), Ok(Ok(1)));
+    assert_eq!(uninit.try_version(), Ok(Ok(CONTRACT_VERSION)));
 
     let (contract_id, escrow) = initialized_escrow(&env);
-    assert_eq!(escrow.try_version(), Ok(Ok(1)));
+    assert_eq!(escrow.try_version(), Ok(Ok(CONTRACT_VERSION)));
 
     env.as_contract(&contract_id, || {
         env.storage().instance().set(&DataKey::Version, &u32::MAX);
     });
-    assert_eq!(escrow.try_version(), Ok(Ok(u32::MAX)));
+    assert_eq!(escrow.try_version(), Ok(Ok(CONTRACT_VERSION)));
+}
+
+/// `version()` must report the crate version from `Cargo.toml`.
+#[test]
+fn version_matches_cargo_pkg_version() {
+    let env = Env::default();
+    let (_, escrow) = initialized_escrow(&env);
+
+    let expected: u32 = env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap();
+    assert_eq!(escrow.version(), expected);
+    assert_eq!(escrow.version(), CONTRACT_VERSION);
 }

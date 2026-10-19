@@ -8,9 +8,24 @@
 // unconditional, so the lint is disabled here deliberately.
 #![allow(clippy::redundant_closure_call)]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN,
-    ContractExecutable, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, token, Address,
+    BytesN, ContractExecutable, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
 };
+
+/// Compile-time code version of this contract, sourced from `Cargo.toml`.
+///
+/// This is the version of the WASM that is actually running, not a counter of
+/// how many times the contract has been upgraded. Two escrows deployed from the
+/// same WASM always report the same value, and a downgrade reports the older
+/// version rather than incrementing.
+pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+contractmeta!(key = "name", val = "milesto-milestone-escrow");
+contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+contractmeta!(
+    key = "source_repo",
+    val = "https://github.com/milesto/milestone-escrow"
+);
 
 /// Maximum number of ratio slots that may be passed to `multisig_transfer_admin`.
 /// A multisig setup with more than this many signers is operationally
@@ -1521,6 +1536,17 @@ impl MilestoneEscrow {
             return Err(Error::NotInitialized);
         }
         Ok(())
+    }
+
+    /// Return the compile-time code version of the running WASM.
+    ///
+    /// This reports the version embedded in the contract metadata
+    /// (`contractmeta!(key = "version")`), i.e. the `Cargo.toml` package
+    /// version of the code that is executing. It is **not** an upgrade
+    /// counter: `DataKey::Version` is retained solely as the storage schema
+    /// version used by migrations.
+    pub fn version(_env: Env) -> Symbol {
+        Symbol::new(&_env, CONTRACT_VERSION)
     }
 
     /// Verify that the caller is either the stored client or freelancer for

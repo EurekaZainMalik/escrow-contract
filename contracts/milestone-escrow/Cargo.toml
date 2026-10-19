@@ -2,6 +2,8 @@
 name = "milestone-escrow"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/your-org/milesto"
+description = "Milestone escrow contract"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
