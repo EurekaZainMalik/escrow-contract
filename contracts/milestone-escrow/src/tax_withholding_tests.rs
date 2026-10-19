@@ -81,8 +81,9 @@ fn tax_withholding_rejects_freelancer_only_signature() {
 #[test]
 fn tax_withholding_rejects_disputed_milestone() {
     let env = Env::default();
-    let (client_addr, _freelancer_addr, _contract_id, escrow) = setup_withholding_case(&env);
+    let (client_addr, freelancer_addr, _contract_id, escrow) = setup_withholding_case(&env);
 
+    escrow.mark_delivered(&freelancer_addr, &0u32);
     escrow.raise_dispute(&client_addr, &0u32);
 
     let result = escrow.try_tax_withholding_deductions(&0u32, &500u32);
