@@ -25,6 +25,8 @@ mod admin_tax_withholding_guards_tests;
 mod admin_transfer_target_tests;
 #[path = "arbitration_split_event_tests.rs"]
 mod arbitration_split_event_tests;
+#[path = "dispute_timeout_tests.rs"]
+mod dispute_timeout_tests;
 #[path = "emergency_pause_split_refund_tests.rs"]
 mod emergency_pause_split_refund_tests;
 #[path = "execute_admin_transfer_tests.rs"]
@@ -475,6 +477,7 @@ fn test_dispute_refund_to_client() {
         &amounts,
     );
     client.fund(&client_addr);
+    client.mark_delivered(&freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
     client.resolve_dispute(&arbiter_addr, &0u32, &false);
 
@@ -546,6 +549,7 @@ fn test_apply_dispute_arbitration_split_full_refund_status() {
     ) = setup_funded_escrow(&env, amounts.clone());
 
     // Move milestone into disputed state
+    client.mark_delivered(&_freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
 
     // Apply 100% refund to client
@@ -578,6 +582,7 @@ fn test_apply_dispute_arbitration_split_odd_amounts() {
     ) = setup_funded_escrow(&env, amounts.clone());
 
     // Raise dispute on tiny amount and apply 50/50 split
+    client.mark_delivered(&_freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
     let alloc: RefundAllocation =
         client.apply_dispute_arbitration_split(&arbiter_addr, &0u32, &5000u32);
@@ -643,6 +648,7 @@ fn test_apply_dispute_arbitration_split_unauthorized_fails() {
 
     // A non-arbiter should not be able to apply split
     let bad_actor = Address::generate(&env);
+    client.mark_delivered(&_freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
     let result = client.try_apply_dispute_arbitration_split(&bad_actor, &0u32, &5000u32);
     assert!(result.is_err());
@@ -1268,6 +1274,7 @@ fn test_resolve_dispute_unauthorized_fails() {
         &amounts,
     );
     client.fund(&client_addr);
+    client.mark_delivered(&freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
 
     let result = client.try_resolve_dispute(&bad_actor, &0u32, &true);
@@ -6066,6 +6073,7 @@ fn test_initialize_state_transition_matrix() {
         &amounts,
     );
     escrow2.fund(&client_addr);
+    escrow2.mark_delivered(&freelancer_addr, &0);
 
     // State 6: Disputed -> Must Revert
     escrow2.raise_dispute(&client_addr, &0);
@@ -7307,8 +7315,10 @@ fn test_raise_dispute_by_client_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client_addr, _, _, _, _, _, client) = setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+    let (client_addr, freelancer_addr, _, _, _, _, client) =
+        setup_funded_escrow(&env, vec![&env, 1_000_i128]);
 
+    client.mark_delivered(&freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
 
     let job = client.get_job();
@@ -7328,9 +7338,10 @@ fn test_raise_dispute_writes_dispute_flag() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client_addr, _, _, _, _, contract_id, client) =
+    let (client_addr, freelancer_addr, _, _, _, contract_id, client) =
         setup_funded_escrow(&env, vec![&env, 1_000_i128]);
 
+    client.mark_delivered(&freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
 
     // Read the temporary storage flag from within the contract context
@@ -7369,9 +7380,10 @@ fn test_dispute_flag_only_sets_targeted_milestone() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client_addr, _, _, _, _, contract_id, client) =
+    let (client_addr, freelancer_addr, _, _, _, contract_id, client) =
         setup_funded_escrow(&env, vec![&env, 1_000_i128, 1_000_i128]);
 
+    client.mark_delivered(&freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
 
     let flag_0 = env.as_contract(&contract_id, || {
@@ -9166,6 +9178,7 @@ fn raise_dispute_budget_for_milestone_count(count: u32) -> (u64, u64) {
     // Dispute the last milestone so any accidental linear scan over the
     // earlier entries would show up in the measured cost.
     let target_index = count - 1;
+    escrow.mark_delivered(&freelancer_addr, &target_index);
 
     let mut budget = env.cost_estimate().budget();
     budget.reset_default();
@@ -10257,8 +10270,9 @@ fn test_dispute_arbitration_split_one_bps() {
 fn test_resolve_dispute_minimum_amount_releases_ok() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client_addr, _, arbiter_addr, _, _, _, escrow) =
+    let (client_addr, freelancer_addr, arbiter_addr, _, _, _, escrow) =
         setup_funded_escrow(&env, vec![&env, 1_i128]);
+    escrow.mark_delivered(&freelancer_addr, &0u32);
     escrow.raise_dispute(&client_addr, &0u32);
     // Arbiter resolves to freelancer — 1 stroop, no overflow
     let result = escrow.try_resolve_dispute(&arbiter_addr, &0u32, &true);
@@ -10270,8 +10284,9 @@ fn test_resolve_dispute_minimum_amount_releases_ok() {
 fn test_resolve_dispute_minimum_amount_refunds_ok() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client_addr, _, arbiter_addr, _, _, _, escrow) =
+    let (client_addr, freelancer_addr, arbiter_addr, _, _, _, escrow) =
         setup_funded_escrow(&env, vec![&env, 1_i128]);
+    escrow.mark_delivered(&freelancer_addr, &0u32);
     escrow.raise_dispute(&client_addr, &0u32);
     let result = escrow.try_resolve_dispute(&arbiter_addr, &0u32, &false);
     assert!(result.is_ok(), "1-stroop refund should succeed");
@@ -10284,8 +10299,9 @@ fn test_resolve_dispute_large_amount_no_overflow() {
     let env = Env::default();
     env.mock_all_auths();
     let large: i128 = 1_000_000_000_000_i128;
-    let (client_addr, _, arbiter_addr, _, _, _, escrow) =
+    let (client_addr, freelancer_addr, arbiter_addr, _, _, _, escrow) =
         setup_funded_escrow(&env, vec![&env, large]);
+    escrow.mark_delivered(&freelancer_addr, &0u32);
     escrow.raise_dispute(&client_addr, &0u32);
     let result = escrow.try_resolve_dispute(&arbiter_addr, &0u32, &true);
     assert!(result.is_ok(), "large-amount resolve must not panic");
@@ -10310,8 +10326,9 @@ fn test_resolve_dispute_zero_remaining_fails_gracefully() {
 fn test_resolve_dispute_already_resolved_fails_gracefully() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client_addr, _, arbiter_addr, _, _, _, escrow) =
+    let (client_addr, freelancer_addr, arbiter_addr, _, _, _, escrow) =
         setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+    escrow.mark_delivered(&freelancer_addr, &0u32);
     escrow.raise_dispute(&client_addr, &0u32);
     escrow.resolve_dispute(&arbiter_addr, &0u32, &true);
     // Second resolve on same milestone must fail gracefully
@@ -10326,8 +10343,10 @@ fn test_resolve_dispute_multiple_milestones_sequential_ok() {
     let env = Env::default();
     env.mock_all_auths();
     let amounts = vec![&env, 100_i128, 200_i128, 300_i128];
-    let (client_addr, _, arbiter_addr, _, _, _, escrow) = setup_funded_escrow(&env, amounts);
+    let (client_addr, freelancer_addr, arbiter_addr, _, _, _, escrow) =
+        setup_funded_escrow(&env, amounts);
     for i in 0u32..3 {
+        escrow.mark_delivered(&freelancer_addr, &i);
         escrow.raise_dispute(&client_addr, &i);
         let ok = escrow.try_resolve_dispute(&arbiter_addr, &i, &(i % 2 == 0));
         assert!(ok.is_ok(), "milestone {} resolve failed", i);
@@ -10577,7 +10596,9 @@ fn test_raise_dispute_zero_contract_address_fails_comprehensive() {
 fn test_raise_dispute_valid_client_address_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client_addr, _, _, _, _, _, escrow) = setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+    let (client_addr, freelancer_addr, _, _, _, _, escrow) =
+        setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+    escrow.mark_delivered(&freelancer_addr, &0u32);
     let result = escrow.try_raise_dispute(&client_addr, &0u32);
     assert!(result.is_ok(), "valid client address must succeed");
 }
@@ -10589,6 +10610,7 @@ fn test_raise_dispute_valid_freelancer_address_succeeds() {
     env.mock_all_auths();
     let (_, freelancer_addr, _, _, _, _, escrow) =
         setup_funded_escrow(&env, vec![&env, 1_000_i128]);
+    escrow.mark_delivered(&freelancer_addr, &0u32);
     let result = escrow.try_raise_dispute(&freelancer_addr, &0u32);
     assert!(result.is_ok(), "valid freelancer address must succeed");
 }
@@ -15098,6 +15120,7 @@ fn test_raise_dispute_refunded_state_returns_invalid_status_and_no_storage_mutat
     client.fund(&client_addr);
 
     // First raise a dispute legitimately, then resolve it as a refund.
+    client.mark_delivered(&freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
     client.resolve_dispute(&arbiter_addr, &0u32, &false);
 
@@ -15126,9 +15149,9 @@ fn test_raise_dispute_refunded_state_returns_invalid_status_and_no_storage_mutat
     );
 }
 
-/// Regression guard — CLIENT can raise a dispute on a Pending milestone.
+/// A dispute cannot be raised before the freelancer delivers the milestone.
 #[test]
-fn test_raise_dispute_by_client_on_pending_milestone_succeeds() {
+fn test_raise_dispute_on_pending_milestone_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -15158,13 +15181,14 @@ fn test_raise_dispute_by_client_on_pending_milestone_succeeds() {
     );
     client.fund(&client_addr);
 
-    client.raise_dispute(&client_addr, &0u32);
+    let result = client.try_raise_dispute(&client_addr, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
 
     let job = client.get_job();
     assert_eq!(
         job.milestones.get(0).unwrap().status,
-        MilestoneStatus::Disputed,
-        "client should be able to raise a dispute on a Pending milestone"
+        MilestoneStatus::Pending,
+        "a Pending milestone must not be frozen by a dispute"
     );
 }
 

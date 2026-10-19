@@ -10,11 +10,13 @@ This contract allows a client to fund a job broken into milestones. Funds are lo
 
 | Function | Caller | Description |
 |---|---|---|
-| `initialize` | Anyone | Set up job with parties, token, and milestone amounts |
+| `initialize` | Anyone | Set up job with a 30-day dispute timeout |
+| `initialize_with_dispute_timeout` | Anyone | Set up job with a custom, non-zero dispute timeout |
 | `fund` | Client | Deposit total amount into contract |
 | `mark_delivered` | Freelancer | Mark a milestone as delivered |
 | `approve_milestone` | Client | Release funds for a delivered milestone |
 | `raise_dispute` | Client or Freelancer | Freeze a milestone for arbitration |
+| `escalate_dispute` | Client or Freelancer | After the timeout, restore a disputed milestone to its previous status |
 | `resolve_dispute` | Arbiter | Release to freelancer or refund to client |
 | `get_job` | Anyone | View current job state |
 
@@ -71,6 +73,7 @@ cargo test -p milestone-escrow
 - Includes milestone delivery, approval, dispute, and arbitration flows
 - Initialize now rejects empty milestone lists, zero/negative amounts, zero addresses, and zero auto-release windows with explicit contract errors
 - `raise_dispute` now performs zero-address check, `require_auth`, and identity validation **before** writing the re-entrancy lock (issue #566), matching the authorization pattern used by `fund`, `approve_milestone`, and `resolve_dispute`; includes the five precondition guard assertions present in all other mutating functions
+- Disputes may only be raised on delivered or partially released milestones. The default dispute timeout is 30 days; `initialize_with_dispute_timeout` allows a custom non-zero timeout. If neither party gets an arbitration decision by that deadline, either party may call `escalate_dispute` to return the milestone to its pre-dispute status; a restored delivered milestone gets a fresh auto-release window
 - `lock_escrow_interest_yield` now rejects unauthorized callers with `Unauthorized` and an illegal source state with `InvalidStatus` **before** it reads or writes the ledger entry (issue #464); authorization runs first via `require_admin_from_instance`, so a non-admin cannot probe whether an escrow is locked, and an already-locked configuration is refused rather than silently re-locked
 - Contract tests and snapshots are provided under `contracts/milestone-escrow/test_snapshots`
 
@@ -131,4 +134,3 @@ Deployment records, including the installed wasm hash, are in
 reproducible builds, so its source commit is unknown.
 
 Explorer: `https://stellar.expert/explorer/testnet/contract/CDD5WKK3WT3QVKXMXTJNDIXE4T73FK6GGXDSD6UTJAH6YYZU52SQ4MUH`
-

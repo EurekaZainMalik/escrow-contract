@@ -32,6 +32,10 @@ const MAX_WHITELIST_SIZE: u32 = 50;
 /// CPU cost and keeps the `u32` party counter from overflowing.
 const MAX_EMERGENCY_ALLOCATION_PARTIES: u32 = 255;
 
+/// Default window before either party may return an unresolved dispute to its
+/// pre-dispute milestone state.
+pub const DISPUTE_TIMEOUT_SECONDS: u64 = 30 * 24 * 60 * 60;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -123,6 +127,10 @@ pub enum Error {
     /// A settlement asked to distribute more than the contract currently
     /// holds in the escrowed token.
     InsufficientBalance = 37,
+    /// A dispute timeout must be greater than zero.
+    InvalidDisputeTimeout = 38,
+    /// The configured dispute timeout has not elapsed yet.
+    DisputeTimeoutNotReached = 39,
 }
 
 const MAX_TREASURY_FEE_BPS: u32 = 2000;
@@ -156,6 +164,13 @@ pub struct Milestone {
     pub released_amount: i128,
     pub status: MilestoneStatus,
     pub delivered_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DisputeInfo {
+    disputed_at: u64,
+    previous_status: MilestoneStatus,
 }
 
 #[contracttype]
@@ -387,6 +402,11 @@ pub enum DataKey {
     /// Appended at the end of `DataKey` so existing variant discriminants stay
     /// stable (serialization compatibility for already-written ledger entries).
     MultiSigConfig,
+    /// Persistent: records a dispute start time and prior milestone status.
+    /// Appended to preserve existing key discriminants.
+    DisputeInfo(u32),
+    /// Instance: the configured timeout for dispute escalation.
+    DisputeTimeout,
 }
 
 #[contracttype]
@@ -472,8 +492,19 @@ pub struct DisputeRaisedEvent {
     pub caller: Address,
     /// The amount of the milestone being disputed, in stroops.
     pub milestone_amount: i128,
+    pub disputed_at: u64,
     /// The resulting milestone status after raising the dispute (always `Disputed`).
     pub new_status: MilestoneStatus,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeEscalatedEvent {
+    pub milestone_index: u32,
+    pub caller: Address,
+    pub disputed_at: u64,
+    pub escalated_at: u64,
+    pub restored_status: MilestoneStatus,
 }
 
 #[contracttype]
@@ -2377,6 +2408,9 @@ impl MilestoneEscrow {
     /// * `auto_release_seconds` – Seconds after a milestone is marked
     ///                           delivered before it becomes eligible for
     ///                           `claim_auto_release`.  Must be non-zero.
+    ///                           The default dispute timeout is 30 days; use
+    ///                           `initialize_with_dispute_timeout` to set a
+    ///                           custom timeout.
     /// * `milestone_amounts`    – Ordered list of token amounts owed per
     ///                           milestone.  Must be non-empty; every
     ///                           individual amount must be strictly positive
@@ -2456,6 +2490,64 @@ impl MilestoneEscrow {
         auto_release_seconds: u64,
         milestone_amounts: Vec<i128>,
     ) -> Result<(), Error> {
+        Self::initialize_inner(
+            env,
+            admin,
+            client,
+            freelancer,
+            arbiter,
+            token,
+            auto_release_seconds,
+            DISPUTE_TIMEOUT_SECONDS,
+            milestone_amounts,
+        )
+    }
+
+    /// Initialize a new milestone escrow with a custom dispute timeout.
+    ///
+    /// After `dispute_timeout_seconds`, either the client or freelancer may
+    /// call `escalate_dispute` to restore the milestone to its status before
+    /// the dispute was raised. The timeout must be non-zero.
+    ///
+    /// # Errors
+    /// * [`Error::InvalidDisputeTimeout`] – `dispute_timeout_seconds` is zero.
+    #[allow(clippy::too_many_arguments)]
+    pub fn initialize_with_dispute_timeout(
+        env: Env,
+        admin: Address,
+        client: Address,
+        freelancer: Address,
+        arbiter: Address,
+        token: Address,
+        auto_release_seconds: u64,
+        dispute_timeout_seconds: u64,
+        milestone_amounts: Vec<i128>,
+    ) -> Result<(), Error> {
+        Self::initialize_inner(
+            env,
+            admin,
+            client,
+            freelancer,
+            arbiter,
+            token,
+            auto_release_seconds,
+            dispute_timeout_seconds,
+            milestone_amounts,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn initialize_inner(
+        env: Env,
+        admin: Address,
+        client: Address,
+        freelancer: Address,
+        arbiter: Address,
+        token: Address,
+        auto_release_seconds: u64,
+        dispute_timeout_seconds: u64,
+        milestone_amounts: Vec<i128>,
+    ) -> Result<(), Error> {
         admin.require_auth();
 
         if env.storage().instance().has(&DataKey::Job) {
@@ -2517,6 +2609,14 @@ impl MilestoneEscrow {
             .set(&DataKey::WhitelistedTokens, &whitelist);
         if auto_release_seconds == 0 {
             return Err(Error::InvalidAmount);
+        }
+        if dispute_timeout_seconds == 0 {
+            return Err(Error::InvalidDisputeTimeout);
+        }
+        if dispute_timeout_seconds != DISPUTE_TIMEOUT_SECONDS {
+            env.storage()
+                .instance()
+                .set(&DataKey::DisputeTimeout, &dispute_timeout_seconds);
         }
 
         for index in 0..milestone_count {
@@ -3544,8 +3644,8 @@ impl MilestoneEscrow {
     ///                        freelancer.
     /// * `NotFunded`        – The escrow has not been funded yet.
     /// * `InvalidMilestone` – `milestone_index` is out of range.
-    /// * `InvalidStatus`    – The milestone is not `Pending`, `Delivered`,
-    ///                        or `PartiallyReleased`.
+    /// * `InvalidStatus`    – The milestone is not `Delivered` or
+    ///                        `PartiallyReleased`.
     pub fn raise_dispute(env: Env, caller: Address, milestone_index: u32) -> Result<(), Error> {
         Self::ensure_not_paused(&env)?;
         Self::assert_tax_withholding_not_locked(&env)?;
@@ -3628,16 +3728,21 @@ impl MilestoneEscrow {
             return Err(Error::InvalidAmount);
         }
 
-        // Strict state machine: only Pending, Delivered, or PartiallyReleased
-        // may transition to Disputed. All other statuses (Released, Refunded,
-        // Disputed) are rejected.
+        // Disputing a milestone is only allowed after delivery. A Pending
+        // milestone has no delivered work to arbitrate.
         match milestone.status {
-            MilestoneStatus::Pending
-            | MilestoneStatus::Delivered
-            | MilestoneStatus::PartiallyReleased => {}
+            MilestoneStatus::Delivered | MilestoneStatus::PartiallyReleased => {}
             _ => return Err(Error::InvalidStatus),
         }
 
+        let disputed_at = env.ledger().timestamp();
+        env.storage().persistent().set(
+            &DataKey::DisputeInfo(milestone_index),
+            &DisputeInfo {
+                disputed_at,
+                previous_status: milestone.status.clone(),
+            },
+        );
         milestone.status = MilestoneStatus::Disputed;
         Self::store_milestone(env, milestone_index, &milestone);
 
@@ -3652,7 +3757,100 @@ impl MilestoneEscrow {
                 milestone_index,
                 caller,
                 milestone_amount: milestone.amount,
+                disputed_at,
                 new_status: MilestoneStatus::Disputed,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Escalate an unresolved dispute after its configured timeout by
+    /// restoring the milestone to the status it had before the dispute.
+    ///
+    /// Either escrow party may call this function. A restored Delivered
+    /// milestone receives a fresh auto-release window starting at escalation.
+    ///
+    /// # Errors
+    /// * [`Error::Paused`] – The contract is emergency-paused.
+    /// * [`Error::InvalidAddress`] – `caller` is a zero address.
+    /// * [`Error::NotInitialized`] – The escrow has not been initialized.
+    /// * [`Error::Unauthorized`] – `caller` is not the client or freelancer.
+    /// * [`Error::NotFunded`] – The escrow has not been funded.
+    /// * [`Error::InvalidMilestone`] – `milestone_index` is out of range.
+    /// * [`Error::InvalidStatus`] – The milestone is not disputed or its
+    ///   dispute metadata is missing.
+    /// * [`Error::DisputeTimeoutNotReached`] – The timeout has not elapsed.
+    pub fn escalate_dispute(env: Env, caller: Address, milestone_index: u32) -> Result<(), Error> {
+        Self::ensure_not_paused(&env)?;
+        Self::assert_tax_withholding_not_locked(&env)?;
+        Self::assert_platform_fee_allocation_not_locked(&env)?;
+        Self::assert_emergency_pause_not_locked(&env)?;
+        Self::assert_time_ext_not_locked(&env)?;
+        Self::assert_payment_streaming_not_locked(&env)?;
+
+        let zero_account = Address::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        let zero_contract = Address::from_str(
+            &env,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        );
+        if caller == zero_account || caller == zero_contract {
+            return Err(Error::InvalidAddress);
+        }
+        let meta = Self::require_dispute_party(&env, &caller)?;
+        if !meta.funded {
+            return Err(Error::NotFunded);
+        }
+        if milestone_index >= meta.milestone_count {
+            return Err(Error::InvalidMilestone);
+        }
+
+        let mut milestone = Self::load_milestone(&env, milestone_index)?;
+        if milestone.status != MilestoneStatus::Disputed {
+            return Err(Error::InvalidStatus);
+        }
+        let dispute_info: DisputeInfo = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DisputeInfo(milestone_index))
+            .ok_or(Error::InvalidStatus)?;
+        let timeout = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeTimeout)
+            .unwrap_or(DISPUTE_TIMEOUT_SECONDS);
+        let escalated_at = env.ledger().timestamp();
+        let elapsed = escalated_at
+            .checked_sub(dispute_info.disputed_at)
+            .ok_or(Error::DisputeTimeoutNotReached)?;
+        if elapsed < timeout {
+            return Err(Error::DisputeTimeoutNotReached);
+        }
+
+        milestone.status = dispute_info.previous_status.clone();
+        if milestone.status == MilestoneStatus::Delivered {
+            milestone.delivered_at = escalated_at;
+            Self::store_delivered_at(&env, milestone_index, escalated_at);
+        }
+        Self::store_milestone(&env, milestone_index, &milestone);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::DisputeInfo(milestone_index));
+        env.storage()
+            .temporary()
+            .remove(&DataKey::DisputeFlag(milestone_index));
+
+        env.events().publish(
+            (symbol_short!("dispescal"),),
+            DisputeEscalatedEvent {
+                milestone_index,
+                caller,
+                disputed_at: dispute_info.disputed_at,
+                escalated_at,
+                restored_status: milestone.status,
             },
         );
 
@@ -3776,6 +3974,9 @@ impl MilestoneEscrow {
                 token_client.transfer(&env.current_contract_address(), &meta.client, &payout);
             }
         }
+        env.storage()
+            .persistent()
+            .remove(&DataKey::DisputeInfo(milestone_index));
 
         env.events().publish(
             (symbol_short!("resolve"),),
@@ -4013,6 +4214,9 @@ impl MilestoneEscrow {
         }
 
         Self::store_milestone(&env, milestone_index, &milestone);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::DisputeInfo(milestone_index));
 
         // Compact temporary signal: one u32 key + one u32 value (not a full
         // RefundAllocation, and not an Address-bearing composite key).
@@ -7296,6 +7500,9 @@ impl MilestoneEscrow {
         milestone.released_amount = milestone.amount;
         milestone.status = MilestoneStatus::Released;
         Self::store_milestone(&env, milestone_index, &milestone);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::DisputeInfo(milestone_index));
         Self::store_milestone_released(&env, milestone_index);
 
         // Reset accrued yield on emergency override
@@ -7400,6 +7607,9 @@ impl MilestoneEscrow {
         milestone.released_amount = milestone.amount;
         milestone.status = MilestoneStatus::Refunded;
         Self::store_milestone(&env, milestone_index, &milestone);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::DisputeInfo(milestone_index));
 
         // Reset accrued yield on emergency override — only write when the
         // stored value is non-zero to avoid an unnecessary ledger mutation.
@@ -7536,6 +7746,9 @@ impl MilestoneEscrow {
         }
 
         Self::store_milestone(&env, milestone_index, &milestone);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::DisputeInfo(milestone_index));
 
         env.events().publish(
             (symbol_short!("admstrm"),),

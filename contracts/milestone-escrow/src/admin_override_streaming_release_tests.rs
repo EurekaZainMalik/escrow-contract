@@ -37,6 +37,7 @@ fn setup_disputed(
 ) {
     let (client_addr, freelancer_addr, _, admin_addr, token_id, _, client) =
         setup_funded_escrow(env, vec![env, amount]);
+    client.mark_delivered(&freelancer_addr, &0u32);
     client.raise_dispute(&client_addr, &0u32);
     (client_addr, freelancer_addr, admin_addr, token_id, client)
 }
