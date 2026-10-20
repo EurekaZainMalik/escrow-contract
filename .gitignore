@@ -1,8 +1,12 @@
 target/
-.env
 *.wasm
 
+temp_auto_push.bat
 .agents/
 skills-lock.json
 issue.md
 dist/
+.gitignore
+branch_structure.json
+config.bat
+node_modules

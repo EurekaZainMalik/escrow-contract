@@ -16,6 +16,7 @@ Thank you for your interest in contributing! This document outlines the process 
 3. Write tests for new functionality (if applicable)
 4. Verify all tests pass: `cargo test --all-targets`
 5. Ensure the code builds: `cargo build --release`
+6. If your change adds, removes or alters a state transition, its required signers, its token movements or its event, update [`contracts/milestone-escrow/SPEC.md`](contracts/milestone-escrow/SPEC.md) in the same PR
 
 ## Code Style
 
@@ -23,6 +24,28 @@ Follow Rust's standard code style and use `cargo fmt` before committing:
 ```bash
 cargo fmt
 ```
+
+## End-to-end tests
+
+Unit tests run against the Soroban test host (`cargo test`). For a full
+integration check, `scripts/e2e.sh` builds the contract, deploys it to a
+throwaway local Stellar network (Docker required) and exercises the funded →
+delivered → dispute → refund lifecycle:
+
+```bash
+bash scripts/e2e.sh
+```
+
+It requires `cargo`, `docker`, and the `stellar` CLI. The same script runs
+nightly (and on demand) via the `E2E` GitHub Actions workflow.
+
+## Documentation requirements
+
+Two references are checked in CI and must stay in sync with the contract:
+
+- `SPEC.md` describes milestone states and dispute semantics.
+- `EVENTS.md` lists every emitted event topic; the `event_docs_sync_tests`
+  module fails if a `symbol_short!` topic is added without a matching row.
 
 ## Submitting Changes
 
