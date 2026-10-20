@@ -6,19 +6,35 @@ A Soroban smart contract on Stellar that enables trustless milestone-based escro
 
 This contract allows a client to fund a job broken into milestones. Funds are locked in the contract and released per milestone only when the client approves delivery. Disputes can be raised by either party and resolved by a designated arbiter.
 
+## Trust Model
+
+The escrow's protection depends on **four distinct roles** assigned at `initialize` time:
+
+- **Admin** — the platform operator. Holds admin-only endpoints (whitelist management, pause/resume, admin overrides, upgrades). The admin is expected to be a neutral platform address, not the client or freelancer.
+- **Client** — funds the job and approves milestone releases.
+- **Freelancer** — delivers milestones and receives payouts.
+- **Arbiter** — a neutral third party that resolves disputes via `resolve_dispute` and `apply_dispute_arbitration_split`.
+
+`initialize` enforces party distinctness: it rejects any collision among `admin`, `client`, `freelancer`, and `arbiter` with `Error::InvalidParties`. This prevents the client from resolving their own disputes (arbiter == client), the freelancer from ruling in their own favour (arbiter == freelancer), or the client from holding every admin override (admin == client). The frontend must pass four genuinely distinct addresses — it must not reuse the connected wallet as both admin and client.
+
 ## Contract Functions
 
 | Function | Caller | Description |
 |---|---|---|
-| `initialize` | Anyone | Set up job with a 30-day dispute timeout |
+| `initialize` | Anyone | Set up job with milestone amounts and spec hashes, a 30-day dispute timeout and Upfront funding |
 | `initialize_with_dispute_timeout` | Anyone | Set up job with a custom, non-zero dispute timeout |
-| `fund` | Client | Deposit total amount into contract |
+| `initialize_with_funding_mode` | Anyone | Set up job with Upfront or PerMilestone funding |
+| `fund` | Client | Deposit total amount into contract (Upfront mode) |
+| `fund_milestone` | Client | Deposit one milestone (PerMilestone mode) |
 | `mark_delivered` | Freelancer | Mark a milestone as delivered |
+| `request_revision` | Client | Return a delivered milestone to Pending (max 3) |
 | `approve_milestone` | Client | Release funds for a delivered milestone |
 | `raise_dispute` | Client or Freelancer | Freeze a milestone for arbitration |
 | `escalate_dispute` | Client or Freelancer | After the timeout, restore a disputed milestone to its previous status |
 | `resolve_dispute` | Arbiter | Release to freelancer or refund to client |
 | `get_job` | Anyone | View current job state |
+| `sweep_excess` | Client or admin | Recover surplus tokens not backing obligations |
+| `emergency_unpause_parties` | Client and freelancer | Jointly lift a party-initiated pause |
 
 ## Milestone States
 
@@ -29,6 +45,12 @@ Pending → Delivered → Released
 Disputed → Released (arbiter favors freelancer)
 
 → Refunded (arbiter favors client)
+
+The full state machine, including every entry point, its required signers and the escrow-level locks, is specified in [`contracts/milestone-escrow/SPEC.md`](contracts/milestone-escrow/SPEC.md).
+
+## Security
+
+Roles, trust assumptions, admin powers and known risks are described in [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
 ## Prerequisites
 
@@ -69,9 +91,11 @@ cargo test -p milestone-escrow
 
 ## Project Status
 
+- Mainnet release gates are tracked in the [mainnet readiness checklist](MAINNET.md)
+- The admin authorization direction and migration decision are recorded in [ADMIN_MULTISIG_DECISION.md](ADMIN_MULTISIG_DECISION.md)
 - Contract implementation completed in `contracts/milestone-escrow`
 - Includes milestone delivery, approval, dispute, and arbitration flows
-- Initialize now rejects empty milestone lists, zero/negative amounts, zero addresses, and zero auto-release windows with explicit contract errors
+- Initialize now rejects empty milestone lists, zero/negative amounts, zero addresses, zero auto-release windows, and **party collisions** (`admin == client`, `admin == freelancer`, `arbiter == client`, `arbiter == freelancer`, `client == freelancer`) with explicit contract errors
 - `raise_dispute` now performs zero-address check, `require_auth`, and identity validation **before** writing the re-entrancy lock (issue #566), matching the authorization pattern used by `fund`, `approve_milestone`, and `resolve_dispute`; includes the five precondition guard assertions present in all other mutating functions
 - Disputes may only be raised on delivered or partially released milestones. The default dispute timeout is 30 days; `initialize_with_dispute_timeout` allows a custom non-zero timeout. If neither party gets an arbitration decision by that deadline, either party may call `escalate_dispute` to return the milestone to its pre-dispute status; a restored delivered milestone gets a fresh auto-release window
 - `lock_escrow_interest_yield` now rejects unauthorized callers with `Unauthorized` and an illegal source state with `InvalidStatus` **before** it reads or writes the ledger entry (issue #464); authorization runs first via `require_admin_from_instance`, so a non-admin cannot probe whether an escrow is locked, and an already-locked configuration is refused rather than silently re-locked

@@ -246,6 +246,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "funded"
+                    },
+                    "val": {
+                      "bool": false
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "released_amount"
                     },
                     "val": {
@@ -400,6 +408,22 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "FundingMode"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Upfront"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "Job"
                           }
                         ]
@@ -428,6 +452,14 @@
                             },
                             "val": {
                               "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "created_at"
+                            },
+                            "val": {
+                              "u64": "0"
                             }
                           },
                           {
