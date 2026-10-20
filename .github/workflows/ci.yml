@@ -48,6 +48,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --manifest-path contracts/milestone-escrow/Cargo.toml --all-targets -- -D warnings
 
+      - name: Main entry-point resource costs
+        run: cargo test --manifest-path contracts/milestone-escrow/Cargo.toml cost_tests::main_entrypoint_cost_baselines -- --nocapture
+
       - name: Run tests
         run: cargo test --manifest-path contracts/milestone-escrow/Cargo.toml
 

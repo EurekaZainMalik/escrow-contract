@@ -38,6 +38,9 @@ def main() -> int:
             else:
                 base = module_source_dir(source_path)
                 target = os.path.join(base, module_name + ".rs")
+                # `mod name;` may also resolve to `name/mod.rs`.
+                if not os.path.exists(target):
+                    target = os.path.join(base, module_name, "mod.rs")
             referenced.add(os.path.normpath(target))
 
     orphans = sorted(
