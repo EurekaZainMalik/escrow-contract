@@ -12,9 +12,20 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN,
-    ContractExecutable, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
+    contract, contracterror, contractimpl, contracttype, contractmeta, symbol_short, token, Address,
+    BytesN, ContractExecutable, Env, IntoVal, Symbol, TryFromVal, Val, Vec,
 };
+
+contractmeta!(key = "name", val = "milesto-milestone-escrow");
+contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+contractmeta!(
+    key = "source_repo",
+    val = "https://github.com/milesto/milesto-contracts"
+);
+
+/// Compile-time code version reported by `version()`. Tracks the crate version,
+/// not the number of upgrades performed on a given escrow instance.
+pub const CONTRACT_VERSION: u32 = 1;
 
 /// Maximum number of ratio slots accepted by `compute_ratio_allocation`.
 /// A multisig setup with more than this many signers is operationally

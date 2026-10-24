@@ -17,13 +17,18 @@
 //!
 //! | Documented case                  | Test                                              |
 //! |----------------------------------|---------------------------------------------------|
-//! | `1` after `initialize`           | `version_is_one_after_initialize`                 |
-//! | stored value after upgrade(s)    | `version_returns_stored_marker`                   |
-//! | `1` when uninitialized           | `version_on_uninitialized_contract_returns_one`   |
+//! | `CONTRACT_VERSION` after `initialize` | `version_is_contract_version_after_initialize` |
+//! | compile-time constant, not upgrade counter | `version_is_independent_of_stored_marker` |
+//! | `CONTRACT_VERSION` when uninitialized | `version_on_uninitialized_contract_returns_contract_version` |
 //! | infallible — no error variants   | `try_version_never_errors`                        |
+//!
+//! # Issue: embed metadata and report code version
+//! `version()` returns the compile-time `CONTRACT_VERSION` (matching
+//! `Cargo.toml`), not an upgrade counter.  `DataKey::Version` is only the
+//! storage schema version for migrations.
 
 use super::*;
-use crate::DataKey;
+use crate::{DataKey, CONTRACT_VERSION};
 use soroban_sdk::{vec, Address, Env};
 
 fn initialized_escrow(env: &Env) -> (Address, MilestoneEscrowClient<'_>) {
@@ -66,7 +71,7 @@ fn version_does_not_mutate_ledger_when_initialized() {
     let v = escrow.version();
     let after = env.to_ledger_snapshot();
 
-    assert_eq!(v, 1);
+    assert_eq!(v, CONTRACT_VERSION);
     assert_eq!(before, after, "version must not mutate the ledger");
 }
 
@@ -80,7 +85,7 @@ fn version_does_not_mutate_ledger_when_uninitialized() {
     let v = escrow.version();
     let after = env.to_ledger_snapshot();
 
-    assert_eq!(v, 1);
+    assert_eq!(v, CONTRACT_VERSION);
     assert_eq!(before, after, "version must not mutate the ledger");
     // The default must not be materialized into storage.
     let stored = env.as_contract(&contract_id, || {
@@ -96,7 +101,7 @@ fn repeated_version_calls_do_not_mutate_ledger() {
 
     let before = env.to_ledger_snapshot();
     for _ in 0..5 {
-        assert_eq!(escrow.version(), 1);
+        assert_eq!(escrow.version(), CONTRACT_VERSION);
     }
     let after = env.to_ledger_snapshot();
 
@@ -136,17 +141,17 @@ fn version_emits_no_events() {
 // ── #559: documented return contract ─────────────────────────────────────────
 
 #[test]
-fn version_is_one_after_initialize() {
+fn version_is_contract_version_after_initialize() {
     let env = Env::default();
     let (_, escrow) = initialized_escrow(&env);
 
-    assert_eq!(escrow.version(), 1);
+    assert_eq!(escrow.version(), CONTRACT_VERSION);
 }
 
-/// `upgrade` bumps the stored marker; seeding it directly checks `version`
-/// reports whatever is stored without needing a real WASM hash.
+/// `version` reports the compile-time code version, not the stored schema
+/// marker. Seeding `DataKey::Version` must not change the result.
 #[test]
-fn version_returns_stored_marker() {
+fn version_is_independent_of_stored_marker() {
     let env = Env::default();
     let (contract_id, escrow) = initialized_escrow(&env);
 
@@ -155,17 +160,17 @@ fn version_returns_stored_marker() {
     });
 
     let before = env.to_ledger_snapshot();
-    assert_eq!(escrow.version(), 7);
+    assert_eq!(escrow.version(), CONTRACT_VERSION);
     assert_eq!(before, env.to_ledger_snapshot());
 }
 
 #[test]
-fn version_on_uninitialized_contract_returns_one() {
+fn version_on_uninitialized_contract_returns_contract_version() {
     let env = Env::default();
     let contract_id = env.register(MilestoneEscrow, ());
     let escrow = MilestoneEscrowClient::new(&env, &contract_id);
 
-    assert_eq!(escrow.version(), 1);
+    assert_eq!(escrow.version(), CONTRACT_VERSION);
 }
 
 /// The rustdoc lists no error variants; confirm none is reachable in any
@@ -176,13 +181,13 @@ fn try_version_never_errors() {
 
     let uninit_id = env.register(MilestoneEscrow, ());
     let uninit = MilestoneEscrowClient::new(&env, &uninit_id);
-    assert_eq!(uninit.try_version(), Ok(Ok(1)));
+    assert_eq!(uninit.try_version(), Ok(Ok(CONTRACT_VERSION)));
 
     let (contract_id, escrow) = initialized_escrow(&env);
-    assert_eq!(escrow.try_version(), Ok(Ok(1)));
+    assert_eq!(escrow.try_version(), Ok(Ok(CONTRACT_VERSION)));
 
     env.as_contract(&contract_id, || {
         env.storage().instance().set(&DataKey::Version, &u32::MAX);
     });
-    assert_eq!(escrow.try_version(), Ok(Ok(u32::MAX)));
+    assert_eq!(escrow.try_version(), Ok(Ok(CONTRACT_VERSION)));
 }
