@@ -8,6 +8,18 @@ which event is published.
 PRs that add, remove or change a transition must update this file (see
 `CONTRIBUTING.md`).
 
+## Contract metadata and versioning
+
+The WASM embeds metadata through `contractmeta!`: `name`
+(`milesto-milestone-escrow`), `version` (the crate's `CARGO_PKG_VERSION`) and
+the source repository URL. `stellar contract info meta --wasm <file>` shows
+these values.
+
+`version()` returns the compile-time `CONTRACT_VERSION` constant, which matches
+`Cargo.toml`. It identifies the running code, not the number of upgrades. The
+storage schema version is kept separately in `DataKey::Version` and is used by
+migrations only.
+
 ## Actors
 
 | Actor | Set by | Notes |
