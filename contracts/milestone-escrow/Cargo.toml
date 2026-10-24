@@ -11,3 +11,7 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[package.metadata.contract]
+name = "milesto-milestone-escrow"
+repository = "https://github.com/milesto/milesto"

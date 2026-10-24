@@ -1,5 +1,4 @@
 target/
-.env
 *.wasm
 
 .agents/
@@ -7,3 +6,5 @@ skills-lock.json
 issue.md
 dist/
 bindings/
+config.bat
+node_modules
