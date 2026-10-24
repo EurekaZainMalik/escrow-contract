@@ -3,14 +3,12 @@
 //! behind it.
 //!
 //! Reputation is bumped for *both* parties every time a milestone reaches
-//! `Released`, through whichever path got it there. The endpoint had no
-//! coverage at all: the two tests that exercised it were removed when
-//! `test.rs` was rewritten, and nothing replaced them, leaving a public
-//! contract function untested while its snapshots stayed behind.
+//! `Released`, through whichever path got it there. Each path that increments
+//! reputation must also emit a `rep` event carrying the new score.
 
 use crate::testutils::EscrowFixture;
 use crate::{Error, MilestoneEscrow, MilestoneEscrowClient};
-use soroban_sdk::testutils::{Address as _, Ledger};
+use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::{Address, Env};
 
 #[test]
@@ -83,6 +81,9 @@ fn test_reputation_auto_release() {
     // same way an explicit approve_milestone does.
     assert_eq!(client.get_reputation(&client_addr), 1);
     assert_eq!(client.get_reputation(&freelancer_addr), 1);
+
+    // And it must emit a reputation event for each party.
+    assert!(!env.events().all().is_empty());
 }
 
 #[test]

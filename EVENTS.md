@@ -46,6 +46,7 @@ addresses as further topics, so RPC `getEvents` can filter by participant
 | `resolve`  | `DisputeResolvedEvent`           | state change      |
 | `sweep`    | `ExcessSweptEvent`               | state change      |
 | `cancel`   | `CancelEscrowInitiatedEvent`     | state change      |
+| `rep`      | `RepChangedEvent`                | state change      |
 | `cxlappr`  | `CancelApprovalRecordedEvent`    | state change      |
 | `cancelrev`| `CancelApprovalRevokedEvent`     | state change      |
 | `upgrade`  | `ContractUpgradedEvent`          | state change      |
